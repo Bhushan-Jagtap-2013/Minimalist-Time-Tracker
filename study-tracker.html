@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Study Tracker</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e2e8f0;
+            --muted: #64748b;
+            --accent: #6366f1;
+            --accent-dim: rgba(99,102,241,0.15);
+            --green: #10b981;
+            --orange: #f59e0b;
+            --red: #ef4444;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1.75rem;
+            padding: 2rem;
+        }
+
+        .header { text-align: center; }
+        .header h1 { font-size: 1.3rem; font-weight: 600; letter-spacing: 0.04em; }
+        .header p  { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+
+        /* File bar */
+        .file-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.45rem 0.9rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.78rem;
+            color: var(--muted);
+        }
+        .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+        .file-bar.connected .dot { background: var(--green); }
+        .file-bar.connected #fileStatus { color: var(--text); }
+        .file-bar .file-actions { display: flex; gap: 0.4rem; margin-left: 0.4rem; }
+        .file-bar button {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            padding: 0.18rem 0.55rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.72rem;
+            transition: border-color 0.15s;
+        }
+        .file-bar button:hover { border-color: var(--accent); }
+
+        /* Timer */
+        .timer-wrap { position: relative; width: 220px; height: 220px; }
+        .timer-svg { transform: rotate(-90deg); }
+        .track { fill: none; stroke: var(--border); stroke-width: 9; }
+        .ring  { fill: none; stroke: var(--accent); stroke-width: 9; stroke-linecap: round;
+                 stroke-dasharray: 597.1; stroke-dashoffset: 0; transition: stroke-dashoffset 1s linear, stroke 0.4s; }
+        .timer-center {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        .countdown { font-size: 2.8rem; font-weight: 300; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+        .timer-status { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.2rem; }
+
+        /* Controls */
+        .controls { display: flex; gap: 0.75rem; }
+        .btn {
+            padding: 0.55rem 1.4rem;
+            border-radius: 8px; border: none;
+            cursor: pointer; font-size: 0.88rem; font-weight: 500;
+            transition: opacity 0.15s, transform 0.1s;
+        }
+        .btn:active { transform: scale(0.97); }
+        .btn-primary { background: var(--accent); color: #fff; min-width: 90px; }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-ghost {
+            background: var(--surface); color: var(--muted);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+        /* Stats */
+        .stats { display: flex; gap: 2rem; }
+        .stat { text-align: center; }
+.stat-val   { font-size: 1.6rem; font-weight: 600; }
+        .stat-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+
+        /* Overlay & modal */
+        .overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.72); backdrop-filter: blur(6px);
+            z-index: 100; align-items: center; justify-content: center;
+        }
+        .overlay.open { display: flex; }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.75rem;
+            width: 460px; max-width: calc(100vw - 2rem);
+            animation: up 0.2s ease;
+        }
+        .modal.compact { width: 320px; }
+        @keyframes up { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+
+        .modal-head {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 1.4rem;
+        }
+        .modal-title { font-size: 1rem; font-weight: 600; }
+        .modal-time  { font-size: 0.75rem; color: var(--muted); background: var(--bg); padding: 0.2rem 0.55rem; border-radius: 4px; }
+
+        .q-block { margin-bottom: 1.1rem; }
+        .q-label {
+            font-size: 0.72rem; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.07em;
+            font-weight: 500; margin-bottom: 0.45rem;
+        }
+
+        .opt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+        .opt-grid.cols3 { grid-template-columns: repeat(3, 1fr); }
+
+        .opt {
+            padding: 0.55rem 0.7rem;
+            background: var(--bg); border: 1px solid var(--border);
+            border-radius: 8px; color: var(--text);
+            cursor: pointer; font-size: 0.82rem; text-align: left;
+            transition: border-color 0.12s, background 0.12s;
+        }
+        .opt:hover { border-color: var(--accent); }
+        .opt.sel    { border-color: var(--accent); background: var(--accent-dim); }
+
+        .notes-box {
+            width: 100%; background: var(--bg);
+            border: 1px solid var(--border); border-radius: 8px;
+            padding: 0.55rem 0.7rem; color: var(--text);
+            font-size: 0.82rem; font-family: inherit;
+            resize: none; outline: none;
+        }
+        .notes-box:focus { border-color: var(--accent); }
+        .notes-box::placeholder { color: var(--muted); }
+
+        .hidden { display: none !important; }
+        #pauseOtherInput:not(.hidden) { display: flex; }
+
+        .modal-foot {
+            display: flex; gap: 0.6rem; justify-content: flex-end;
+            margin-top: 1.4rem;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed; bottom: 1.5rem; right: 1.5rem;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 0.6rem 1rem;
+            font-size: 0.82rem; z-index: 200;
+            opacity: 0; transform: translateY(6px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.ok  { border-color: var(--green); color: var(--green); }
+        .toast.err { border-color: var(--red);   color: var(--red); }
+
+        @media (max-width: 480px) {
+            .stats { gap: 1.2rem; }
+            .modal { padding: 1.25rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Study Tracker</h1>
+    <p>5-minute check-ins · stay on track</p>
+</div>
+
+<div class="file-bar" id="fileBar">
+    <div class="dot"></div>
+    <span id="fileStatus">No log file connected</span>
+    <div class="file-actions">
+        <button onclick="openFile()">Open existing</button>
+        <button onclick="newFile()">Create new</button>
+    </div>
+</div>
+
+<div class="timer-wrap">
+    <svg class="timer-svg" width="220" height="220" viewBox="0 0 220 220">
+        <circle class="track" cx="110" cy="110" r="95"/>
+        <circle class="ring"  cx="110" cy="110" r="95" id="ring"/>
+    </svg>
+    <div class="timer-center">
+        <div class="countdown" id="countdown">5:00</div>
+        <div class="timer-status" id="status">ready</div>
+    </div>
+</div>
+
+<div class="controls">
+    <button class="btn btn-ghost" onclick="resetTimer()">Reset</button>
+    <button class="btn btn-primary" id="startBtn" onclick="toggle()">Start</button>
+</div>
+
+<div class="stats">
+    <div class="stat">
+        <div class="stat-val">📚 <span id="sMin">0</span></div>
+        <div class="stat-label">min studied</div>
+    </div>
+    <div class="stat">
+        <div class="stat-val">✅ <span id="sCheckins">0</span></div>
+        <div class="stat-label">check-ins</div>
+    </div>
+    <div class="stat">
+        <div class="stat-val">🔥 <span id="sStreak">0</span></div>
+        <div class="stat-label">streak</div>
+    </div>
+</div>
+
+<!-- Pause reason modal -->
+<div class="overlay" id="pauseOverlay">
+    <div class="modal compact">
+        <div class="modal-head">
+            <div class="modal-title">Why are you pausing?</div>
+        </div>
+        <div class="opt-grid">
+            <button class="opt" onclick="selectPauseReason('Hunger')">🍽 Hunger</button>
+            <button class="opt" onclick="selectPauseReason('Phone/social')">📱 Phone / social</button>
+            <button class="opt" onclick="selectPauseReason('Break')">🚻 Break</button>
+            <button class="opt" id="pauseOtherBtn" onclick="selectPauseReason('Other')">💭 Other</button>
+        </div>
+        <div id="pauseOtherInput" class="hidden" style="margin-top:0.75rem; gap:0.5rem;">
+            <input id="pauseOtherText" class="notes-box" type="text"
+                placeholder="Describe reason…" style="padding:0.45rem 0.7rem;"
+                onkeydown="if(event.key==='Enter') submitPause(document.getElementById('pauseOtherText').value.trim() || 'Other')"/>
+            <button class="btn btn-primary" style="padding:0.45rem 0.9rem; white-space:nowrap;"
+                onclick="submitPause(document.getElementById('pauseOtherText').value.trim() || 'Other')">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- Check-in modal -->
+<div class="overlay" id="overlay">
+    <div class="modal">
+        <div class="modal-head">
+            <div class="modal-title">Check-in</div>
+            <div class="modal-time" id="checkinTime"></div>
+        </div>
+
+        <!-- Q1: Status -->
+        <div class="q-block">
+            <div class="q-label">Are you studying right now?</div>
+            <div class="opt-grid">
+                <button class="opt" data-q="s" data-v="Yes"        onclick="pick(this,'s')">✅ Yes, focused</button>
+                <button class="opt" data-q="s" data-v="Break"      onclick="pick(this,'s')">⏸ On a break</button>
+                <button class="opt" data-q="s" data-v="Distracted" onclick="pick(this,'s')">😵 Distracted</button>
+                <button class="opt" data-q="s" data-v="Done"       onclick="pick(this,'s')">🏁 Done for today</button>
+            </div>
+        </div>
+
+        <!-- Q2: Topic (Yes only) -->
+        <div class="q-block hidden" id="qTopic">
+            <div class="q-label">What are you working on?</div>
+            <div class="opt-grid">
+                <button class="opt" data-q="t" data-v="LeetCode"      onclick="pick(this,'t')">💻 LeetCode</button>
+                <button class="opt" data-q="t" data-v="System Design" onclick="pick(this,'t')">🏗 System Design</button>
+                <button class="opt" data-q="t" data-v="Behavioral"    onclick="pick(this,'t')">🗣 Behavioral</button>
+                <button class="opt" data-q="t" data-v="Admin"         onclick="pick(this,'t')">📋 Admin / Other</button>
+            </div>
+        </div>
+
+        <!-- Q3: Focus (Yes only) -->
+        <div class="q-block hidden" id="qFocus">
+            <div class="q-label">Focus level?</div>
+            <div class="opt-grid cols3">
+                <button class="opt" data-q="f" data-v="High"   onclick="pick(this,'f')">🔥 High</button>
+                <button class="opt" data-q="f" data-v="Medium" onclick="pick(this,'f')">😐 Medium</button>
+                <button class="opt" data-q="f" data-v="Low"    onclick="pick(this,'f')">😴 Low</button>
+            </div>
+        </div>
+
+        <!-- Q4: Distraction trigger (Distracted only) -->
+        <div class="q-block hidden" id="qTrigger">
+            <div class="q-label">What triggered it?</div>
+            <div class="opt-grid">
+                <button class="opt" data-q="d" data-v="Hunger"  onclick="pick(this,'d')">🍽 Hunger</button>
+                <button class="opt" data-q="d" data-v="Social"  onclick="pick(this,'d')">📱 Social / news</button>
+                <button class="opt" data-q="d" data-v="Anxiety" onclick="pick(this,'d')">💭 Anxiety</button>
+                <button class="opt" data-q="d" data-v="Other"   onclick="pick(this,'d')">❓ Other</button>
+            </div>
+        </div>
+
+        <!-- Q5: Notes -->
+        <div class="q-block">
+            <div class="q-label">Notes (optional)</div>
+            <textarea class="notes-box" id="notes" rows="2"
+                placeholder="What did you accomplish? Any blockers?"></textarea>
+        </div>
+
+        <div class="modal-foot">
+            <button class="btn btn-ghost" onclick="skip()">Skip</button>
+            <button class="btn btn-primary" onclick="submitCheckin()">Log it</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Helpers ────────────────────────────────────────────────────────────────
+function fmtHHMM(ts) {
+    const d = new Date(ts);
+    return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+}
+
+// ── Config ─────────────────────────────────────────────────────────────────
+const MINS  = 5;
+const TOTAL = MINS * 60;
+const R     = 95;
+const CIRC  = 2 * Math.PI * R;
+
+// ── State ──────────────────────────────────────────────────────────────────
+let rem = TOTAL, running = false, ticker = null;
+let fh = null;
+let ans = {};
+
+// Session lifecycle
+let sessionStarted  = false;
+let sessionStartTime = null;
+let sessionNum      = 0;
+let pauseStartTime  = null;
+let modalOpenTime   = null;
+
+// Stats
+let stats = {
+    min: 0, checkins: 0, streak: 0, lastYes: false,
+    pauses: 0,
+    focusCounts: { High: 0, Medium: 0, Low: 0 },
+    distractionTriggers: {}
+};
+
+// ── Timer ──────────────────────────────────────────────────────────────────
+function toggle() {
+    if (running) {
+        pauseSession();
+    } else if (pauseStartTime !== null) {
+        resume();
+    } else {
+        startSession();
+    }
+}
+
+function startSession() {
+    clearInterval(ticker); // guard: prevent double-timer
+    if (!sessionStarted) {
+        sessionStarted   = true;
+        sessionNum++;
+        sessionStartTime = Date.now();
+        stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
+                  focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
+        renderStats();
+        const startLabel = fmtHHMM(sessionStartTime);
+        logEvent('SESSION START', `sess:${startLabel}`);
+    }
+    running = true;
+    ticker  = setInterval(tick, 1000);
+    document.getElementById('startBtn').textContent = 'Pause';
+    document.getElementById('status').textContent   = 'studying';
+}
+
+function pauseSession() {
+    clearInterval(ticker);
+    running        = false;
+    pauseStartTime = Date.now();
+    document.getElementById('startBtn').textContent = 'Resume';
+    document.getElementById('status').textContent   = 'paused';
+    document.getElementById('pauseOverlay').classList.add('open');
+}
+
+function selectPauseReason(reason) {
+    if (reason === 'Other') {
+        document.getElementById('pauseOtherInput').classList.remove('hidden');
+        document.getElementById('pauseOtherInput').style.display = 'flex';
+        document.getElementById('pauseOtherText').focus();
+    } else {
+        submitPause(reason);
+    }
+}
+
+function submitPause(reason) {
+    document.getElementById('pauseOverlay').classList.remove('open');
+    document.getElementById('pauseOtherInput').classList.add('hidden');
+    document.getElementById('pauseOtherText').value = '';
+    stats.pauses++;
+    logEvent('PAUSE', `sess:${fmtHHMM(sessionStartTime)} | reason:${reason}`);
+}
+
+function resume() {
+    const elapsed   = Date.now() - pauseStartTime;
+    const m         = Math.floor(elapsed / 60000);
+    const s         = Math.floor((elapsed % 60000) / 1000);
+    const pausedStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
+    pauseStartTime  = null;
+
+    logEvent('RESUME', `sess:${fmtHHMM(sessionStartTime)} | paused:${pausedStr}`);
+
+    clearInterval(ticker); // guard
+    running = true;
+    ticker  = setInterval(tick, 1000);
+    document.getElementById('startBtn').textContent = 'Pause';
+    document.getElementById('status').textContent   = 'studying';
+}
+
+function resetTimer() {
+    clearInterval(ticker);
+    running         = false;
+    pauseStartTime  = null;
+    sessionStarted  = false;
+    sessionStartTime = null;
+    rem             = TOTAL;
+    stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
+              focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
+    submitting = false;
+    renderRing();
+    renderStats();
+    document.getElementById('startBtn').textContent = 'Start';
+    document.getElementById('status').textContent   = 'ready';
+}
+
+function tick() {
+    rem--;
+    renderRing();
+    if (rem <= 0) {
+        clearInterval(ticker);
+        running       = false;
+        rem           = TOTAL;
+        modalOpenTime = Date.now();
+        chime();
+        openCheckinModal();
+    }
+}
+
+function renderRing() {
+    const m = Math.floor(rem / 60);
+    const s = rem % 60;
+    document.getElementById('countdown').textContent = `${m}:${s.toString().padStart(2,'0')}`;
+
+    const offset = CIRC * (1 - rem / TOTAL);
+    const ring   = document.getElementById('ring');
+    ring.style.strokeDashoffset = offset;
+
+    const pct = rem / TOTAL;
+    ring.style.stroke = pct > 0.5 ? '#6366f1' : pct > 0.2 ? '#f59e0b' : '#ef4444';
+}
+
+// ── Audio ──────────────────────────────────────────────────────────────────
+function chime() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        [[523.25, 0], [659.25, 0.2], [783.99, 0.4], [1046.5, 0.6]].forEach(([freq, t]) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.type = 'sine'; osc.frequency.value = freq;
+            const s = ctx.currentTime + t;
+            gain.gain.setValueAtTime(0, s);
+            gain.gain.linearRampToValueAtTime(0.22, s + 0.04);
+            gain.gain.exponentialRampToValueAtTime(0.0001, s + 1.1);
+            osc.start(s); osc.stop(s + 1.1);
+        });
+    } catch(e) {}
+}
+
+// ── Check-in modal ─────────────────────────────────────────────────────────
+function openCheckinModal() {
+    ans = {};
+    document.querySelectorAll('.opt').forEach(b => b.classList.remove('sel'));
+    document.getElementById('notes').value = '';
+    document.getElementById('qTopic').classList.add('hidden');
+    document.getElementById('qFocus').classList.add('hidden');
+    document.getElementById('qTrigger').classList.add('hidden');
+
+    const now = new Date();
+    document.getElementById('checkinTime').textContent =
+        `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+
+    document.getElementById('overlay').classList.add('open');
+    document.getElementById('status').textContent = 'check-in';
+}
+
+function pick(btn, q) {
+    document.querySelectorAll(`[data-q="${q}"]`).forEach(b => b.classList.remove('sel'));
+    btn.classList.add('sel');
+    ans[q] = btn.dataset.v;
+
+    if (q === 's') {
+        const yes        = ans.s === 'Yes';
+        const distracted = ans.s === 'Distracted';
+        document.getElementById('qTopic').classList.toggle('hidden', !yes);
+        document.getElementById('qFocus').classList.toggle('hidden', !yes);
+        document.getElementById('qTrigger').classList.toggle('hidden', !distracted);
+        if (!yes)        { delete ans.t; delete ans.f; }
+        if (!distracted) { delete ans.d; }
+    }
+}
+
+function skip() {
+    document.getElementById('overlay').classList.remove('open');
+    restartCycle();
+}
+
+let submitting = false;
+async function submitCheckin() {
+    if (!ans.s) { toast('Please select a status', 'err'); return; }
+    if (submitting) return;
+    submitting = true;
+
+    const studying = ans.s;
+    const topic    = ans.t || null;
+    const focus    = ans.f || null;
+    const trigger  = ans.d || null;
+    const notes    = document.getElementById('notes').value.trim() || null;
+    const resp     = modalOpenTime ? Math.round((Date.now() - modalOpenTime) / 1000) : null;
+
+    // Update stats
+    stats.checkins++;
+    if (studying === 'Yes') {
+        stats.min   += MINS;
+        stats.streak = stats.lastYes ? stats.streak + 1 : 1;
+        stats.lastYes = true;
+        if (focus) stats.focusCounts[focus] = (stats.focusCounts[focus] || 0) + 1;
+    } else {
+        stats.streak  = 0;
+        stats.lastYes = false;
+        if (trigger) stats.distractionTriggers[trigger] = (stats.distractionTriggers[trigger] || 0) + 1;
+    }
+    renderStats();
+
+    // Build structured details string
+    const parts = [`sess:${fmtHHMM(sessionStartTime)}`, `status:${studying}`];
+    if (topic)   parts.push(`topic:${topic}`);
+    if (focus)   parts.push(`focus:${focus}`);
+    if (trigger) parts.push(`trigger:${trigger}`);
+    if (resp !== null) parts.push(`resp:${resp}s`);
+    if (notes)   parts.push(`notes:${notes}`);
+
+    await logEvent('CHECK-IN', parts.join(' | '));
+
+    document.getElementById('overlay').classList.remove('open');
+    toast('Logged ✓', 'ok');
+
+    if (studying === 'Done') {
+        await logSessionEnd();
+        sessionStarted = false;
+        document.getElementById('status').textContent   = 'session ended';
+        document.getElementById('startBtn').textContent = 'Start';
+    } else {
+        restartCycle();
+    }
+    submitting = false;
+}
+
+async function logSessionEnd() {
+    const duration    = Math.round((Date.now() - sessionStartTime) / 60000);
+    const onTask      = stats.checkins ? Math.round(stats.min / (stats.checkins * MINS) * 100) : 0;
+    const fc          = stats.focusCounts;
+    const focusStr    = `H${fc.High}/M${fc.Medium}/L${fc.Low}`;
+    const topDistract = Object.entries(stats.distractionTriggers).sort((a,b) => b[1]-a[1])[0]?.[0] || 'none';
+    const details     = [
+        `sess:${fmtHHMM(sessionStartTime)}`,
+        `duration:${duration}m`,
+        `studied:${stats.min}m`,
+        `on-task:${onTask}%`,
+        `pauses:${stats.pauses}`,
+        `focus:${focusStr}`,
+        `top-distraction:${topDistract}`
+    ].join(' | ');
+    await logEvent('SESSION END', details);
+}
+
+function restartCycle() {
+    rem = TOTAL;
+    renderRing();
+    startSession();
+}
+
+function renderStats() {
+    document.getElementById('sMin').textContent      = stats.min;
+    document.getElementById('sCheckins').textContent = stats.checkins;
+    document.getElementById('sStreak').textContent   = stats.streak;
+}
+
+// ── File System ────────────────────────────────────────────────────────────
+const FILE_TYPES = [{
+    description: 'Markdown',
+    accept: { 'text/markdown': ['.md'], 'text/plain': ['.md', '.txt'] }
+}];
+
+async function openFile() {
+    if (!window.showOpenFilePicker) { toast('Use Chrome or Edge for file access', 'err'); return; }
+    try {
+        [fh] = await window.showOpenFilePicker({ types: FILE_TYPES });
+        updateFileBar();
+        toast('File connected', 'ok');
+    } catch(e) { if (e.name !== 'AbortError') toast('Could not open file', 'err'); }
+}
+
+async function newFile() {
+    if (!window.showSaveFilePicker) { toast('Use Chrome or Edge for file access', 'err'); return; }
+    try {
+        fh = await window.showSaveFilePicker({ suggestedName: 'study-log.md', types: FILE_TYPES });
+        const w = await fh.createWritable();
+        await w.write('# Study Log\n\nTracked every ' + MINS + ' minutes.\n\n');
+        await w.close();
+        updateFileBar();
+        toast('New log created', 'ok');
+    } catch(e) { if (e.name !== 'AbortError') toast('Could not create file', 'err'); }
+}
+
+function updateFileBar() {
+    const bar = document.getElementById('fileBar');
+    bar.classList.toggle('connected', !!fh);
+    document.getElementById('fileStatus').textContent = fh ? fh.name : 'No log file connected';
+}
+
+let writeQueue = Promise.resolve();
+
+function logEvent(event, details) {
+    const now  = new Date();
+    const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+    const date = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const row  = `| ${time} | ${event.padEnd(13)} | ${details} |\n`;
+
+    writeQueue = writeQueue.then(() => _writeRow(row, date));
+    return writeQueue;
+}
+
+async function _writeRow(row, date) {
+    if (!fh) {
+        try { await navigator.clipboard.writeText(row); toast('No file — row copied to clipboard', 'err'); }
+        catch(e) { toast('No file connected', 'err'); }
+        return;
+    }
+    try {
+        const file    = await fh.getFile();
+        let content   = await file.text();
+        const section = `## ${date}`;
+        const header  = '| Time  | Event         | Details |\n|-------|---------------|---------|';
+
+        if (!content.includes(section)) {
+            content += `\n---\n\n${section}\n\n${header}\n`;
+        }
+        content += row;
+
+        const w = await fh.createWritable();
+        await w.write(content);
+        await w.close();
+    } catch(e) {
+        toast('Write error: ' + e.message, 'err');
+    }
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type='') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `toast show ${type}`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+renderRing();
+</script>
+</body>
+</html>
