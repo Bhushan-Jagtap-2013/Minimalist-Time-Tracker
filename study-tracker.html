@@ -268,6 +268,11 @@
                 <button class="opt" data-q="c" data-v="Barely anything" onclick="pick(this,'c')">❌ Barely anything</button>
             </div>
         </div>
+        <div class="q-block" style="margin-top:0.9rem;">
+            <div class="q-label">Summary (optional)</div>
+            <textarea class="notes-box" id="completionNotes" rows="2"
+                placeholder="What did you get done?"></textarea>
+        </div>
         <div class="modal-foot">
             <button class="btn btn-primary" onclick="submitCompletion()">Done</button>
         </div>
@@ -636,21 +641,23 @@ async function submitCheckin() {
 
 function openCompletionModal() {
     document.querySelectorAll('[data-q="c"]').forEach(b => b.classList.remove('sel'));
+    document.getElementById('completionNotes').value = '';
     document.getElementById('completionOverlay').classList.add('open');
 }
 
 async function submitCompletion() {
     const el = document.querySelector('[data-q="c"].sel');
     if (!el) { toast('Please select a completion level', 'err'); return; }
+    const summary = document.getElementById('completionNotes').value.trim() || null;
     document.getElementById('completionOverlay').classList.remove('open');
-    await logSessionEnd(el.dataset.v);
+    await logSessionEnd(el.dataset.v, summary);
     sessionStarted = false;
     sessionGoal    = null;
     document.getElementById('status').textContent   = 'session ended';
     document.getElementById('startBtn').textContent = 'Start';
 }
 
-async function logSessionEnd(completion) {
+async function logSessionEnd(completion, summary = null) {
     const duration    = Math.round((Date.now() - sessionStartTime) / 60000);
     const onTask      = stats.checkins ? Math.round(stats.min / (stats.checkins * MINS) * 100) : 0;
     const fc          = stats.focusCounts;
@@ -667,6 +674,7 @@ async function logSessionEnd(completion) {
     ];
     if (sessionGoal)  parts.push(`goal:${sessionGoal}`);
     if (completion)   parts.push(`completed:${completion}`);
+    if (summary)      parts.push(`summary:${summary}`);
     await logEvent('SESSION END', parts.join(' | '));
 }
 
