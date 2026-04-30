@@ -233,6 +233,47 @@
     </div>
 </div>
 
+<!-- Session goal modal -->
+<div class="overlay" id="goalOverlay">
+    <div class="modal compact">
+        <div class="modal-head">
+            <div class="modal-title">Session Goal</div>
+        </div>
+        <div class="q-block">
+            <div class="q-label">What do you want to accomplish?</div>
+            <input id="goalInput" class="notes-box" type="text"
+                placeholder="e.g. Solve 3 LeetCode mediums…" style="padding:0.45rem 0.7rem;"
+                onkeydown="if(event.key==='Enter') submitGoal()"/>
+        </div>
+        <div class="modal-foot">
+            <button class="btn btn-ghost" onclick="submitGoal()">Skip</button>
+            <button class="btn btn-primary" onclick="submitGoal()">Start</button>
+        </div>
+    </div>
+</div>
+
+<!-- Session completion modal -->
+<div class="overlay" id="completionOverlay">
+    <div class="modal compact">
+        <div class="modal-head">
+            <div class="modal-title">Session Complete</div>
+        </div>
+        <div class="q-block">
+            <div class="q-label">How much of your goal did you complete?</div>
+            <div class="opt-grid" style="grid-template-columns:1fr;">
+                <button class="opt" data-q="c" data-v="All of it"       onclick="pick(this,'c')">✅ All of it</button>
+                <button class="opt" data-q="c" data-v="Most of it"      onclick="pick(this,'c')">👍 Most of it</button>
+                <button class="opt" data-q="c" data-v="About half"      onclick="pick(this,'c')">🔀 About half</button>
+                <button class="opt" data-q="c" data-v="Less than half"  onclick="pick(this,'c')">📉 Less than half</button>
+                <button class="opt" data-q="c" data-v="Barely anything" onclick="pick(this,'c')">❌ Barely anything</button>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button class="btn btn-primary" onclick="submitCompletion()">Done</button>
+        </div>
+    </div>
+</div>
+
 <!-- Pause reason modal -->
 <div class="overlay" id="pauseOverlay">
     <div class="modal compact">
@@ -346,6 +387,7 @@ let sessionStartTime = null;
 let sessionNum      = 0;
 let pauseStartTime  = null;
 let modalOpenTime   = null;
+let sessionGoal     = null;
 
 // Stats
 let stats = {
@@ -357,13 +399,29 @@ let stats = {
 
 // ── Timer ──────────────────────────────────────────────────────────────────
 function toggle() {
+    if (!fh) { toast('Connect a log file first', 'err'); return; }
     if (running) {
         pauseSession();
     } else if (pauseStartTime !== null) {
         resume();
+    } else if (!sessionStarted) {
+        openGoalModal();
     } else {
         startSession();
     }
+}
+
+function openGoalModal() {
+    document.getElementById('goalInput').value = '';
+    document.getElementById('goalOverlay').classList.add('open');
+    document.getElementById('goalInput').focus();
+}
+
+function submitGoal() {
+    const goal = document.getElementById('goalInput').value.trim();
+    sessionGoal = goal || null;
+    document.getElementById('goalOverlay').classList.remove('open');
+    startSession();
 }
 
 function startSession() {
@@ -376,7 +434,8 @@ function startSession() {
                   focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
         renderStats();
         const startLabel = fmtHHMM(sessionStartTime);
-        logEvent('SESSION START', `sess:${startLabel}`);
+        const goalPart   = sessionGoal ? ` | goal:${sessionGoal}` : '';
+        logEvent('SESSION START', `sess:${startLabel}${goalPart}`);
     }
     running = true;
     ticker  = setInterval(tick, 1000);
@@ -436,7 +495,8 @@ function resetTimer() {
     rem             = TOTAL;
     stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
               focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
-    submitting = false;
+    submitting  = false;
+    sessionGoal = null;
     renderRing();
     renderStats();
     document.getElementById('startBtn').textContent = 'Start';
@@ -566,23 +626,36 @@ async function submitCheckin() {
     toast('Logged ✓', 'ok');
 
     if (studying === 'Done') {
-        await logSessionEnd();
-        sessionStarted = false;
-        document.getElementById('status').textContent   = 'session ended';
-        document.getElementById('startBtn').textContent = 'Start';
+        openCompletionModal();
     } else {
         restartCycle();
     }
     submitting = false;
 }
 
-async function logSessionEnd() {
+function openCompletionModal() {
+    document.querySelectorAll('[data-q="c"]').forEach(b => b.classList.remove('sel'));
+    document.getElementById('completionOverlay').classList.add('open');
+}
+
+async function submitCompletion() {
+    const el = document.querySelector('[data-q="c"].sel');
+    if (!el) { toast('Please select a completion level', 'err'); return; }
+    document.getElementById('completionOverlay').classList.remove('open');
+    await logSessionEnd(el.dataset.v);
+    sessionStarted = false;
+    sessionGoal    = null;
+    document.getElementById('status').textContent   = 'session ended';
+    document.getElementById('startBtn').textContent = 'Start';
+}
+
+async function logSessionEnd(completion) {
     const duration    = Math.round((Date.now() - sessionStartTime) / 60000);
     const onTask      = stats.checkins ? Math.round(stats.min / (stats.checkins * MINS) * 100) : 0;
     const fc          = stats.focusCounts;
     const focusStr    = `H${fc.High}/M${fc.Medium}/L${fc.Low}`;
     const topDistract = Object.entries(stats.distractionTriggers).sort((a,b) => b[1]-a[1])[0]?.[0] || 'none';
-    const details     = [
+    const parts = [
         `sess:${fmtHHMM(sessionStartTime)}`,
         `duration:${duration}m`,
         `studied:${stats.min}m`,
@@ -590,8 +663,10 @@ async function logSessionEnd() {
         `pauses:${stats.pauses}`,
         `focus:${focusStr}`,
         `top-distraction:${topDistract}`
-    ].join(' | ');
-    await logEvent('SESSION END', details);
+    ];
+    if (sessionGoal)  parts.push(`goal:${sessionGoal}`);
+    if (completion)   parts.push(`completed:${completion}`);
+    await logEvent('SESSION END', parts.join(' | '));
 }
 
 function restartCycle() {
@@ -624,7 +699,8 @@ async function openFile() {
 async function newFile() {
     if (!window.showSaveFilePicker) { toast('Use Chrome or Edge for file access', 'err'); return; }
     try {
-        fh = await window.showSaveFilePicker({ suggestedName: 'study-log.md', types: FILE_TYPES });
+        const today = new Date().toLocaleDateString('en-CA');
+        fh = await window.showSaveFilePicker({ suggestedName: `study-log-${today}.md`, types: FILE_TYPES });
         const w = await fh.createWritable();
         await w.write('# Study Log\n\nTracked every ' + MINS + ' minutes.\n\n');
         await w.close();
