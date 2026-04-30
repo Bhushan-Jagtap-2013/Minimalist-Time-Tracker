@@ -371,8 +371,9 @@ function fmtHHMM(ts) {
 }
 
 // ── Config ─────────────────────────────────────────────────────────────────
+const TEST_MODE = new URLSearchParams(location.search).has('test');
 const MINS  = 5;
-const TOTAL = MINS * 60;
+const TOTAL = TEST_MODE ? 2 : MINS * 60;
 const R     = 95;
 const CIRC  = 2 * Math.PI * R;
 
