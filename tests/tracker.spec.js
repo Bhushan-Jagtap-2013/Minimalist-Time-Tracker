@@ -122,7 +122,9 @@ test.describe('Timer and check-in', () => {
         await page.click('button:has-text("Log it")');
         await expect(page.locator('.toast')).toContainText('Logged');
         await expect(page.locator('#sCheckins')).toHaveText('1');
-        await expect(page.locator('#sMin')).toHaveText('5');
+        // studied time uses actual elapsed (clamped to min 1), not a fixed MINS constant
+        const sMin = await page.locator('#sMin').textContent();
+        expect(Number(sMin)).toBeGreaterThanOrEqual(1);
     });
 });
 
@@ -185,6 +187,175 @@ test.describe('Pause flow', () => {
         await page.click('button:has-text("Break")');
         await page.click('#startBtn');
         await expect(page.locator('#status')).toHaveText('studying');
+    });
+});
+
+test.describe('Tab title', () => {
+    test.beforeEach(async ({ page }) => {
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+    });
+
+    test('Title is Study Tracker before session starts', async ({ page }) => {
+        expect(await page.title()).toBe('Study Tracker');
+    });
+
+    test('Title shows countdown while session is running', async ({ page }) => {
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await page.waitForTimeout(500);
+        const title = await page.title();
+        expect(title).toMatch(/^\d+:\d{2} — Study Tracker$/);
+    });
+
+    test('Title shows alert when check-in modal opens', async ({ page }) => {
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 4000 });
+        expect(await page.title()).toBe('⏰ Log it! — Study Tracker');
+    });
+
+    test('Title restores countdown after skipping check-in', async ({ page }) => {
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 4000 });
+        await page.locator('#overlay button:has-text("Skip")').click();
+        const title = await page.title();
+        expect(title).toMatch(/^\d+:\d{2} — Study Tracker$/);
+    });
+
+    test('Title shows alert when check-in modal opens after submit restarts cycle', async ({ page }) => {
+        // After submitting a check-in the cycle restarts; when the next timer fires the
+        // alert title should appear again — verifying the title lifecycle is continuous.
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 4000 });
+        await page.click('[data-v="Yes"]');
+        await page.click('button:has-text("Log it")');
+        await expect(page.locator('.toast')).toContainText('Logged');
+        // next cycle fires within 2s in test mode
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 5000 });
+        expect(await page.title()).toBe('⏰ Log it! — Study Tracker');
+    });
+
+    test('Title resets to Study Tracker after reset', async ({ page }) => {
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await page.waitForTimeout(300);
+        await page.click('button:has-text("Reset")');
+        expect(await page.title()).toBe('Study Tracker');
+    });
+});
+
+test.describe('Browser Notifications', () => {
+    async function mockNotifications(page, permission = 'default') {
+        await page.addInitScript((perm) => {
+            window._notifPermissionRequested = false;
+            window._notifSent = false;
+            window._notifTitle = null;
+            window._notifPermission = perm;
+            class MockNotification {
+                static get permission() { return window._notifPermission; }
+                static async requestPermission() {
+                    window._notifPermissionRequested = true;
+                    window._notifPermission = 'granted';
+                    return 'granted';
+                }
+                constructor(title, opts) {
+                    window._notifSent = true;
+                    window._notifTitle = title;
+                    this.onclick = null;
+                }
+                close() {}
+            }
+            window.Notification = MockNotification;
+        }, permission);
+    }
+
+    test('Requests notification permission when session starts', async ({ page }) => {
+        await mockNotifications(page, 'default');
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        const requested = await page.evaluate(() => window._notifPermissionRequested);
+        expect(requested).toBe(true);
+    });
+
+    test('Does not re-request permission when already granted', async ({ page }) => {
+        await mockNotifications(page, 'granted');
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        const requested = await page.evaluate(() => window._notifPermissionRequested);
+        expect(requested).toBe(false);
+    });
+
+    test('Sends notification when check-in timer fires', async ({ page }) => {
+        await mockNotifications(page, 'granted');
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 4000 });
+        const sent = await page.evaluate(() => window._notifSent);
+        expect(sent).toBe(true);
+        const title = await page.evaluate(() => window._notifTitle);
+        expect(title).toContain('Time to log');
+    });
+
+    test('Does not send notification when permission denied', async ({ page }) => {
+        await mockNotifications(page, 'denied');
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 4000 });
+        const sent = await page.evaluate(() => window._notifSent);
+        expect(sent).toBe(false);
+    });
+});
+
+test.describe('Studied time accuracy', () => {
+    test.beforeEach(async ({ page }) => {
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost');
+        await expect(page.locator('#overlay')).toHaveClass(/open/, { timeout: 4000 });
+    });
+
+    test('Yes check-in adds at least 1 studied minute', async ({ page }) => {
+        await page.click('[data-v="Yes"]');
+        await page.click('button:has-text("Log it")');
+        const sMin = Number(await page.locator('#sMin').textContent());
+        expect(sMin).toBeGreaterThanOrEqual(1);
+    });
+
+    test('Done check-in also adds studied time', async ({ page }) => {
+        await page.click('[data-v="Done"]');
+        await page.click('button:has-text("Log it")');
+        const sMin = Number(await page.locator('#sMin').textContent());
+        expect(sMin).toBeGreaterThanOrEqual(1);
+    });
+
+    test('Distracted check-in adds no studied time', async ({ page }) => {
+        await page.click('[data-v="Distracted"]');
+        await page.click('button:has-text("Log it")');
+        expect(await page.locator('#sMin')).toHaveText('0');
+    });
+
+    test('Break check-in adds no studied time', async ({ page }) => {
+        await page.click('[data-v="Break"]');
+        await page.click('button:has-text("Log it")');
+        expect(await page.locator('#sMin')).toHaveText('0');
     });
 });
 

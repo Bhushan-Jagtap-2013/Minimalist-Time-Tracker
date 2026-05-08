@@ -382,8 +382,61 @@ const TOTAL = TEST_MODE ? 2 : MINS * 60;
 const R     = 95;
 const CIRC  = 2 * Math.PI * R;
 
+// ── Web Worker Timer ───────────────────────────────────────────────────────
+function createWorker() {
+    const src = `
+        let rem = 0, t = null;
+        onmessage = function(e) {
+            if (e.data.type === 'start') {
+                rem = e.data.total;
+                clearInterval(t);
+                t = setInterval(() => {
+                    rem--;
+                    postMessage({ type: 'tick', rem });
+                    if (rem <= 0) { clearInterval(t); postMessage({ type: 'done' }); }
+                }, 1000);
+            } else if (e.data.type === 'stop') {
+                clearInterval(t);
+            }
+        };
+    `;
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
+    w.onmessage = onWorkerMessage;
+    return w;
+}
+let worker = createWorker();
+
+function onWorkerMessage(e) {
+    if (e.data.type === 'tick') {
+        rem = e.data.rem;
+        renderRing();
+    } else if (e.data.type === 'done') {
+        running       = false;
+        modalOpenTime = Date.now();
+        chime();
+        sendNotification();
+        openCheckinModal();
+    }
+}
+
+// ── Notifications ──────────────────────────────────────────────────────────
+async function requestNotifPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission();
+    }
+}
+
+function sendNotification() {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const n = new Notification('⏰ Time to log your check-in!', {
+        body: 'Switch to your Study Tracker tab to log your progress.',
+        tag: 'study-checkin',
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
-let rem = TOTAL, running = false, ticker = null;
+let rem = TOTAL, running = false;
 let fh = null;
 let ans = {};
 
@@ -393,6 +446,7 @@ let sessionStartTime = null;
 let sessionNum      = 0;
 let pauseStartTime  = null;
 let modalOpenTime   = null;
+let lastCycleStart  = null;
 let sessionGoal     = null;
 
 // Stats
@@ -431,26 +485,28 @@ function submitGoal() {
 }
 
 function startSession() {
-    clearInterval(ticker); // guard: prevent double-timer
     if (!sessionStarted) {
         sessionStarted   = true;
         sessionNum++;
         sessionStartTime = Date.now();
+        lastCycleStart   = Date.now();
         stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
                   focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
         renderStats();
         const startLabel = fmtHHMM(sessionStartTime);
         const goalPart   = sessionGoal ? ` | goal:${sessionGoal}` : '';
         logEvent('SESSION START', `sess:${startLabel}${goalPart}`);
+        requestNotifPermission();
     }
     running = true;
-    ticker  = setInterval(tick, 1000);
+    worker.postMessage({ type: 'start', total: rem });
+    updateTitle();
     document.getElementById('startBtn').textContent = 'Pause';
     document.getElementById('status').textContent   = 'studying';
 }
 
 function pauseSession() {
-    clearInterval(ticker);
+    worker.postMessage({ type: 'stop' });
     running        = false;
     pauseStartTime = Date.now();
     document.getElementById('startBtn').textContent = 'Resume';
@@ -485,41 +541,29 @@ function resume() {
 
     logEvent('RESUME', `sess:${fmtHHMM(sessionStartTime)} | paused:${pausedStr}`);
 
-    clearInterval(ticker); // guard
     running = true;
-    ticker  = setInterval(tick, 1000);
+    worker.postMessage({ type: 'start', total: rem });
     document.getElementById('startBtn').textContent = 'Pause';
     document.getElementById('status').textContent   = 'studying';
 }
 
 function resetTimer() {
-    clearInterval(ticker);
-    running         = false;
-    pauseStartTime  = null;
-    sessionStarted  = false;
+    worker.postMessage({ type: 'stop' });
+    running          = false;
+    pauseStartTime   = null;
+    sessionStarted   = false;
     sessionStartTime = null;
-    rem             = TOTAL;
+    lastCycleStart   = null;
+    rem              = TOTAL;
     stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
               focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
     submitting  = false;
     sessionGoal = null;
+    document.title = 'Study Tracker';
     renderRing();
     renderStats();
     document.getElementById('startBtn').textContent = 'Start';
     document.getElementById('status').textContent   = 'ready';
-}
-
-function tick() {
-    rem--;
-    renderRing();
-    if (rem <= 0) {
-        clearInterval(ticker);
-        running       = false;
-        rem           = TOTAL;
-        modalOpenTime = Date.now();
-        chime();
-        openCheckinModal();
-    }
 }
 
 function renderRing() {
@@ -533,6 +577,14 @@ function renderRing() {
 
     const pct = rem / TOTAL;
     ring.style.stroke = pct > 0.5 ? '#6366f1' : pct > 0.2 ? '#f59e0b' : '#ef4444';
+    updateTitle();
+}
+
+function updateTitle() {
+    if (!sessionStarted) { document.title = 'Study Tracker'; return; }
+    const m = Math.floor(rem / 60);
+    const s = rem % 60;
+    document.title = `${m}:${s.toString().padStart(2,'0')} — Study Tracker`;
 }
 
 // ── Audio ──────────────────────────────────────────────────────────────────
@@ -568,6 +620,7 @@ function openCheckinModal() {
 
     document.getElementById('overlay').classList.add('open');
     document.getElementById('status').textContent = 'check-in';
+    document.title = '⏰ Log it! — Study Tracker';
 }
 
 function pick(btn, q) {
@@ -588,6 +641,7 @@ function pick(btn, q) {
 
 function skip() {
     document.getElementById('overlay').classList.remove('open');
+    updateTitle();
     restartCycle();
 }
 
@@ -606,9 +660,10 @@ async function submitCheckin() {
 
     // Update stats
     stats.checkins++;
-    if (studying === 'Yes') {
-        stats.min   += MINS;
-        stats.streak = stats.lastYes ? stats.streak + 1 : 1;
+    if (studying === 'Yes' || studying === 'Done') {
+        const elapsed = lastCycleStart ? Math.round((modalOpenTime - lastCycleStart) / 60000) : MINS;
+        stats.min    += Math.max(1, elapsed);
+        stats.streak  = stats.lastYes ? stats.streak + 1 : 1;
         stats.lastYes = true;
         if (focus) stats.focusCounts[focus] = (stats.focusCounts[focus] || 0) + 1;
     } else {
@@ -629,7 +684,9 @@ async function submitCheckin() {
     await logEvent('CHECK-IN', parts.join(' | '));
 
     document.getElementById('overlay').classList.remove('open');
+    updateTitle();
     toast('Logged ✓', 'ok');
+    lastCycleStart = Date.now();
 
     if (studying === 'Done') {
         openCompletionModal();
@@ -659,7 +716,7 @@ async function submitCompletion() {
 
 async function logSessionEnd(completion, summary = null) {
     const duration    = Math.round((Date.now() - sessionStartTime) / 60000);
-    const onTask      = stats.checkins ? Math.round(stats.min / (stats.checkins * MINS) * 100) : 0;
+    const onTask      = duration ? Math.round(stats.min / duration * 100) : 0;
     const fc          = stats.focusCounts;
     const focusStr    = `H${fc.High}/M${fc.Medium}/L${fc.Low}`;
     const topDistract = Object.entries(stats.distractionTriggers).sort((a,b) => b[1]-a[1])[0]?.[0] || 'none';
@@ -679,6 +736,7 @@ async function logSessionEnd(completion, summary = null) {
 }
 
 function restartCycle() {
+    lastCycleStart = Date.now();
     rem = TOTAL;
     renderRing();
     startSession();
