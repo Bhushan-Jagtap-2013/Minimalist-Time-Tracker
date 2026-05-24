@@ -95,12 +95,26 @@
             border: 1px solid var(--border);
         }
         .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+        .btn-stop {
+            background: var(--surface); color: var(--red);
+            border: 1px solid var(--red);
+        }
+        .btn-stop:hover { background: rgba(239,68,68,0.1); }
 
         /* Stats */
         .stats { display: flex; gap: 2rem; }
         .stat { text-align: center; }
-.stat-val   { font-size: 1.6rem; font-weight: 600; }
+        .stat-val   { font-size: 1.6rem; font-weight: 600; }
         .stat-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+
+        .stat-btn {
+            background: none; border: none; color: inherit;
+            cursor: pointer; padding: 0; text-align: center;
+            border-radius: 8px;
+            transition: background 0.15s;
+        }
+        .stat-btn:hover { background: rgba(239,68,68,0.08); }
+        .stat-btn:active .stat-val { transform: scale(0.93); display: block; transition: transform 0.1s; }
 
         /* Overlay & modal */
         .overlay {
@@ -216,6 +230,7 @@
 <div class="controls">
     <button class="btn btn-ghost" onclick="resetTimer()">Reset</button>
     <button class="btn btn-primary" id="startBtn" onclick="toggle()">Start</button>
+    <button class="btn btn-stop hidden" id="stopBtn" onclick="stopSession()">Stop Session</button>
 </div>
 
 <div class="stats">
@@ -235,6 +250,10 @@
         <div class="stat-val">🔥 <span id="sStreak">0</span></div>
         <div class="stat-label">streak</div>
     </div>
+    <button class="stat stat-btn" onclick="bumpDistraction()" title="Tap when you catch yourself wandering">
+        <div class="stat-val">😵 <span id="sDistractions">0</span></div>
+        <div class="stat-label">distractions</div>
+    </button>
 </div>
 
 <!-- Session goal modal -->
@@ -496,6 +515,7 @@ function startSession() {
         sessionStartTime = Date.now();
         lastCycleStart   = Date.now();
         stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
+                  distractions: 0, distractionsTotal: 0,
                   focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
         renderStats();
         const startLabel = fmtHHMM(sessionStartTime);
@@ -535,6 +555,7 @@ function submitPause(reason) {
     document.getElementById('pauseOtherText').value = '';
     stats.pauses++;
     logEvent('PAUSE', `sess:${fmtHHMM(sessionStartTime)} | reason:${reason}`);
+    document.getElementById('stopBtn').classList.remove('hidden');
 }
 
 function resume() {
@@ -551,6 +572,7 @@ function resume() {
     worker.postMessage({ type: 'start', total: rem });
     document.getElementById('startBtn').textContent = 'Pause';
     document.getElementById('status').textContent   = 'studying';
+    document.getElementById('stopBtn').classList.add('hidden');
 }
 
 function resetTimer() {
@@ -563,6 +585,7 @@ function resetTimer() {
     cyclePausedMs    = 0;
     rem              = TOTAL;
     stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
+              distractions: 0, distractionsTotal: 0,
               focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
     submitting  = false;
     sessionGoal = null;
@@ -573,6 +596,7 @@ function resetTimer() {
     renderStats();
     document.getElementById('startBtn').textContent = 'Start';
     document.getElementById('status').textContent   = 'ready';
+    document.getElementById('stopBtn').classList.add('hidden');
 }
 
 function renderRing() {
@@ -719,10 +743,14 @@ async function submitCheckin() {
     if (topic)   parts.push(`topic:${topic}`);
     if (focus)   parts.push(`focus:${focus}`);
     if (trigger) parts.push(`trigger:${trigger}`);
+    parts.push(`distractions:${stats.distractions}`);
     if (resp !== null) parts.push(`resp:${resp}s`);
     if (notes)   parts.push(`notes:${notes}`);
 
     await logEvent('CHECK-IN', parts.join(' | '));
+
+    stats.distractions = 0;
+    renderStats();
 
     document.getElementById('overlay').classList.remove('open');
     updateTitle();
@@ -737,6 +765,11 @@ async function submitCheckin() {
     submitting = false;
 }
 
+function stopSession() {
+    document.getElementById('stopBtn').classList.add('hidden');
+    openCompletionModal();
+}
+
 function openCompletionModal() {
     document.querySelectorAll('[data-q="c"]').forEach(b => b.classList.remove('sel'));
     document.getElementById('completionNotes').value = '';
@@ -749,8 +782,12 @@ async function submitCompletion() {
     const summary = document.getElementById('completionNotes').value.trim() || null;
     document.getElementById('completionOverlay').classList.remove('open');
     await logSessionEnd(el.dataset.v, summary);
-    sessionStarted = false;
-    sessionGoal    = null;
+    sessionStarted  = false;
+    sessionGoal     = null;
+    pauseStartTime  = null;
+    rem             = TOTAL;
+    renderRing();
+    document.getElementById('stopBtn').classList.add('hidden');
     document.getElementById('status').textContent   = 'session ended';
     document.getElementById('startBtn').textContent = 'Start';
 }
@@ -767,6 +804,7 @@ async function logSessionEnd(completion, summary = null) {
         `studied:${stats.min}m`,
         `on-task:${onTask}%`,
         `pauses:${stats.pauses}`,
+        `distractions:${stats.distractionsTotal}`,
         `focus:${focusStr}`,
         `top-distraction:${topDistract}`
     ];
@@ -785,9 +823,19 @@ function restartCycle() {
 }
 
 function renderStats() {
-    document.getElementById('sMin').textContent      = stats.min;
-    document.getElementById('sCheckins').textContent = stats.checkins;
-    document.getElementById('sStreak').textContent   = stats.streak;
+    document.getElementById('sMin').textContent          = stats.min;
+    document.getElementById('sCheckins').textContent     = stats.checkins;
+    document.getElementById('sStreak').textContent       = stats.streak;
+    document.getElementById('sDistractions').textContent = stats.distractions;
+}
+
+function bumpDistraction() {
+    if (!sessionStarted) { toast('Start a session first', 'err'); return; }
+    stats.distractions++;
+    stats.distractionsTotal++;
+    renderStats();
+    logEvent('DISTRACTION', `sess:${fmtHHMM(sessionStartTime)} | interval:${stats.distractions} | session-total:${stats.distractionsTotal}`);
+    toast(`Distraction #${stats.distractionsTotal} logged`, 'ok');
 }
 
 // ── File System ────────────────────────────────────────────────────────────
