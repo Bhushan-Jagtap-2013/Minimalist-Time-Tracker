@@ -447,6 +447,7 @@ let sessionNum      = 0;
 let pauseStartTime  = null;
 let modalOpenTime   = null;
 let lastCycleStart  = null;
+let cyclePausedMs   = 0;
 let sessionGoal     = null;
 
 // Stats
@@ -533,10 +534,11 @@ function submitPause(reason) {
 }
 
 function resume() {
-    const elapsed   = Date.now() - pauseStartTime;
-    const m         = Math.floor(elapsed / 60000);
-    const s         = Math.floor((elapsed % 60000) / 1000);
+    const pausedMs  = Date.now() - pauseStartTime;
+    const m         = Math.floor(pausedMs / 60000);
+    const s         = Math.floor((pausedMs % 60000) / 1000);
     const pausedStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
+    cyclePausedMs  += pausedMs;
     pauseStartTime  = null;
 
     logEvent('RESUME', `sess:${fmtHHMM(sessionStartTime)} | paused:${pausedStr}`);
@@ -554,6 +556,7 @@ function resetTimer() {
     sessionStarted   = false;
     sessionStartTime = null;
     lastCycleStart   = null;
+    cyclePausedMs    = 0;
     rem              = TOTAL;
     stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
               focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
@@ -661,7 +664,7 @@ async function submitCheckin() {
     // Update stats
     stats.checkins++;
     if (studying === 'Yes' || studying === 'Done') {
-        const elapsed = lastCycleStart ? Math.round((modalOpenTime - lastCycleStart) / 60000) : MINS;
+        const elapsed = lastCycleStart ? Math.round((modalOpenTime - lastCycleStart - cyclePausedMs) / 60000) : MINS;
         stats.min    += Math.max(1, elapsed);
         stats.streak  = stats.lastYes ? stats.streak + 1 : 1;
         stats.lastYes = true;
@@ -737,6 +740,7 @@ async function logSessionEnd(completion, summary = null) {
 
 function restartCycle() {
     lastCycleStart = Date.now();
+    cyclePausedMs  = 0;
     rem = TOTAL;
     renderRing();
     startSession();
