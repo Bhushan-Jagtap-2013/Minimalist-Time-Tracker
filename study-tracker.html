@@ -656,16 +656,35 @@ function updateTitle() {
 function chime() {
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        [[523.25, 0], [659.25, 0.2], [783.99, 0.4], [1046.5, 0.6]].forEach(([freq, t]) => {
-            const osc = ctx.createOscillator();
+
+        // Fast 5-note ascending run → triumphant chord hit
+        // Run: C5 → E5 → G5 → C6 → E6 (80ms apart)
+        const run = [
+            [523.25, 0,    0.5,  0.18],
+            [659.25, 0.08, 0.5,  0.18],
+            [783.99, 0.16, 0.5,  0.18],
+            [1046.5, 0.24, 0.55, 0.18],
+            [1318.5, 0.32, 0.6,  0.18],
+        ];
+        // Chord: C6 + E6 + G6 + C7 all at once
+        const chord = [
+            [1046.5, 0.42, 0.65, 2.0],
+            [1318.5, 0.42, 0.6,  2.0],
+            [1567.9, 0.42, 0.5,  2.0],
+            [2093.0, 0.42, 0.25, 1.5],
+        ];
+
+        [...run, ...chord].forEach(([freq, t, vol, dur]) => {
+            const osc  = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.connect(gain); gain.connect(ctx.destination);
-            osc.type = 'sine'; osc.frequency.value = freq;
+            osc.type = t < 0.4 ? 'triangle' : 'sine';
+            osc.frequency.value = freq;
             const s = ctx.currentTime + t;
             gain.gain.setValueAtTime(0, s);
-            gain.gain.linearRampToValueAtTime(0.22, s + 0.04);
-            gain.gain.exponentialRampToValueAtTime(0.0001, s + 1.1);
-            osc.start(s); osc.stop(s + 1.1);
+            gain.gain.linearRampToValueAtTime(vol, s + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, s + dur);
+            osc.start(s); osc.stop(s + dur + 0.05);
         });
     } catch(e) {}
 }
