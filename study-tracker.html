@@ -224,6 +224,10 @@
         <div class="stat-label">min studied</div>
     </div>
     <div class="stat">
+        <div class="stat-val">⏱ <span id="sWall">0</span></div>
+        <div class="stat-label">min elapsed</div>
+    </div>
+    <div class="stat">
         <div class="stat-val">✅ <span id="sCheckins">0</span></div>
         <div class="stat-label">check-ins</div>
     </div>
@@ -563,6 +567,7 @@ function resetTimer() {
     submitting  = false;
     sessionGoal = null;
     document.title = 'Study Tracker';
+    document.getElementById('sWall').textContent = '0';
     renderRing();
     renderStats();
     document.getElementById('startBtn').textContent = 'Start';
@@ -834,6 +839,11 @@ function toast(msg, type='') {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
+setInterval(() => {
+    if (sessionStarted && sessionStartTime) {
+        document.getElementById('sWall').textContent = Math.floor((Date.now() - sessionStartTime) / 60000);
+    }
+}, 1000);
 renderRing();
 </script>
 </body>
