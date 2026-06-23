@@ -33,7 +33,11 @@ The entire app is a single file: `study-tracker.html`. It has no build step, no 
 
 **Timer**: A Web Worker (created inline via `URL.createObjectURL`) drives the countdown so it isn't throttled when the tab is backgrounded. The main thread receives `tick` and `done` messages from the worker.
 
-**Timer states** cycle through: `ready → studying → paused → check-in → studying → … → session ended`. The `#status` element and `#startBtn` label always reflect the current state.
+**Timer states** cycle through: `ready → studying → paused → check-in → studying → … → session ended`. When a session reaches its planned length the state becomes `time’s up` (session bell); ignoring the bell ends it as `abandoned`. The `#status` element and `#startBtn` label always reflect the current state.
+
+**Pre-session gate**: Before the first timer start, the `goalOverlay` modal shows a checklist (☐ eaten ☐ drank water ☐ phone away ☐ tabs closed), a planned-length picker (25/50/90 min, default 50), and the optional goal input. Checklist taps and the chosen length are non-blocking but logged to SESSION START (`prep:…`, `length:…`) — the friction is intentional, to discourage impulsive starts.
+
+**Session bell / max length + auto-end**: `startSession()` sets `sessionDeadline = start + plannedMin`. The 1-second interval calls `fireSessionBell()` when the deadline passes (only while actively studying with no other modal open). The bell offers **End** (→ completion modal), **Keep going +10m** (`bellExtend`, snoozes the deadline and resumes), and **Take a break** (`bellBreak`, snoozes then drops into the pause flow). If untouched for 2 minutes (`abandonTimer`; 4 s in test mode) the session auto-ends via `autoEndAbandoned()` and is logged with `abandoned:true`.
 
 **Ring color** tracks urgency via `renderRing()`: >50% remaining = `--accent` (#6366f1 indigo), >20% = `--orange` (#f59e0b), ≤20% = `--red` (#ef4444).
 
@@ -45,21 +49,24 @@ The entire app is a single file: `study-tracker.html`. It has no build step, no 
 
 | Event | When logged | Key fields |
 |---|---|---|
-| `SESSION START` | Session begins | `sess`, `goal` (optional) |
+| `SESSION START` | Session begins | `sess`, `length`, `goal` (optional), `prep` |
 | `PAUSE` | Timer paused | `sess`, `reason` |
 | `RESUME` | Timer resumed | `sess`, `paused` (duration) |
 | `DISTRACTION` | 😵 button tapped | `sess`, `interval`, `session-total` |
 | `CHECK-IN` | Every 5-min cycle | `sess`, `status`, `topic`, `focus`, `trigger`, `distractions`, `resp`, `notes` |
-| `SESSION END` | Session completed | `sess`, `duration`, `studied`, `on-task`, `pauses`, `distractions`, `focus`, `top-distraction`, `goal`, `completed`, `summary` |
+| `SESSION END` | Session completed | `sess`, `planned`, `duration`, `active`, `studied`, `focus-ratio`, `on-task`, `pauses`, `distractions`, `focus`, `top-distraction`, `goal`, `completed`, `abandoned`, `summary` |
 
-**Modals**: Four overlays — goal (session start), check-in (every 5 min), pause reason, and session completion. Each is shown/hidden by toggling the `.open` class on `.overlay`.
+**Two elapsed metrics**: `duration` is wall-clock minutes (`now − start`); `active` is wall-clock minus all paused time (`sessionPausedMs`). The real focus ratio is `focus-ratio` = `studied / active`; `on-task` = `studied / duration` is kept for comparison and is noisy when a session sat paused for hours. The stats bar shows both **min elapsed** (`sWall`, wall-clock) and **active min** (`sActive`).
 
-**Stats bar**: Five live counters displayed below the controls:
+**Modals**: Five overlays — pre-session (`goalOverlay`: checklist + length + goal), check-in (every 5 min), pause reason, session completion, and session bell (`sessionBellOverlay`: planned length reached). Each is shown/hidden by toggling the `.open` class on `.overlay`.
+
+**Stats bar**: Six live counters displayed below the controls:
 
 | ID | Label | Description |
 |---|---|---|
 | `sMin` | min studied | Focused minutes across all check-ins answered "Yes" or "Done" |
 | `sWall` | min elapsed | Wall-clock minutes since session start, updated every second |
+| `sActive` | active min | Wall-clock minus all paused time (the real denominator for focus ratio) |
 | `sCheckins` | check-ins | Total check-ins submitted this session |
 | `sStreak` | streak | Consecutive "Yes/Done" check-ins; resets on Break/Distracted |
 | `sDistractions` | distractions | Taps since the last check-in; **clickable** — tap to record a wandering moment |

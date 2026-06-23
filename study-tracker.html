@@ -243,6 +243,10 @@
         <div class="stat-label">min elapsed</div>
     </div>
     <div class="stat">
+        <div class="stat-val">🎯 <span id="sActive">0</span></div>
+        <div class="stat-label">active min</div>
+    </div>
+    <div class="stat">
         <div class="stat-val">✅ <span id="sCheckins">0</span></div>
         <div class="stat-label">check-ins</div>
     </div>
@@ -256,11 +260,28 @@
     </button>
 </div>
 
-<!-- Session goal modal -->
+<!-- Pre-session modal (checklist + planned length + goal) -->
 <div class="overlay" id="goalOverlay">
     <div class="modal compact">
         <div class="modal-head">
-            <div class="modal-title">Session Goal</div>
+            <div class="modal-title">Before you start</div>
+        </div>
+        <div class="q-block">
+            <div class="q-label">Pre-session checklist</div>
+            <div class="opt-grid">
+                <button class="opt" data-prep="eaten" onclick="togglePrep(this)">🍽 Eaten</button>
+                <button class="opt" data-prep="water" onclick="togglePrep(this)">💧 Drank water</button>
+                <button class="opt" data-prep="phone" onclick="togglePrep(this)">📴 Phone away</button>
+                <button class="opt" data-prep="tabs"  onclick="togglePrep(this)">🗂 Tabs closed</button>
+            </div>
+        </div>
+        <div class="q-block">
+            <div class="q-label">Planned length</div>
+            <div class="opt-grid cols3">
+                <button class="opt"     data-len="25" onclick="pickLength(this,25)">25m</button>
+                <button class="opt sel" data-len="50" onclick="pickLength(this,50)">50m</button>
+                <button class="opt"     data-len="90" onclick="pickLength(this,90)">90m</button>
+            </div>
         </div>
         <div class="q-block">
             <div class="q-label">What do you want to accomplish?</div>
@@ -272,6 +293,24 @@
             <button class="btn btn-ghost" onclick="submitGoal()">Skip</button>
             <button class="btn btn-primary" onclick="submitGoal()">Start</button>
         </div>
+    </div>
+</div>
+
+<!-- Session bell modal (planned length reached) -->
+<div class="overlay" id="sessionBellOverlay">
+    <div class="modal compact">
+        <div class="modal-head">
+            <div class="modal-title">⏰ Planned time reached</div>
+        </div>
+        <div class="q-block">
+            <div class="q-label">You hit your planned session length. What now?</div>
+            <div class="opt-grid" style="grid-template-columns:1fr;">
+                <button class="opt" onclick="bellEnd()">🏁 End session</button>
+                <button class="opt" onclick="bellExtend(10)">➕ Keep going +10m</button>
+                <button class="opt" onclick="bellBreak()">☕ Take a break</button>
+            </div>
+        </div>
+        <div class="q-label" id="bellCountdown" style="text-align:center; margin-top:0.6rem;"></div>
     </div>
 </div>
 
@@ -449,12 +488,10 @@ async function requestNotifPermission() {
     }
 }
 
-function sendNotification() {
+function sendNotification(title = '⏰ Time to log your check-in!',
+                          body = 'Switch to your Study Tracker tab to log your progress.') {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const n = new Notification('⏰ Time to log your check-in!', {
-        body: 'Switch to your Study Tracker tab to log your progress.',
-        tag: 'study-checkin',
-    });
+    const n = new Notification(title, { body, tag: 'study-checkin' });
     n.onclick = () => { window.focus(); n.close(); };
 }
 
@@ -472,6 +509,13 @@ let modalOpenTime   = null;
 let lastCycleStart  = null;
 let cyclePausedMs   = 0;
 let sessionGoal     = null;
+let sessionPrep     = [];        // checked pre-session checklist items
+let sessionPausedMs = 0;         // total paused ms across whole session
+let plannedMin      = 50;        // planned session length (min)
+let sessionDeadline = null;      // ts when planned length elapses
+let bellFired       = false;     // session bell already prompted this cycle
+let abandonDeadline = null;      // ts for auto-abandon
+let abandonTimer    = null;      // setTimeout handle for auto-abandon
 
 // Stats
 let stats = {
@@ -497,13 +541,28 @@ function toggle() {
 
 function openGoalModal() {
     document.getElementById('goalInput').value = '';
+    document.querySelectorAll('#goalOverlay [data-prep]').forEach(b => b.classList.remove('sel'));
+    plannedMin = 50;
+    document.querySelectorAll('#goalOverlay [data-len]')
+        .forEach(b => b.classList.toggle('sel', b.dataset.len === '50'));
     document.getElementById('goalOverlay').classList.add('open');
     document.getElementById('goalInput').focus();
+}
+
+function togglePrep(btn) {
+    btn.classList.toggle('sel');
+}
+
+function pickLength(btn, mins) {
+    document.querySelectorAll('#goalOverlay [data-len]').forEach(b => b.classList.remove('sel'));
+    btn.classList.add('sel');
+    plannedMin = mins;
 }
 
 function submitGoal() {
     const goal = document.getElementById('goalInput').value.trim();
     sessionGoal = goal || null;
+    sessionPrep = [...document.querySelectorAll('#goalOverlay [data-prep].sel')].map(b => b.dataset.prep);
     document.getElementById('goalOverlay').classList.remove('open');
     startSession();
 }
@@ -514,13 +573,17 @@ function startSession() {
         sessionNum++;
         sessionStartTime = Date.now();
         lastCycleStart   = Date.now();
+        sessionPausedMs  = 0;
+        sessionDeadline  = sessionStartTime + plannedMin * 60000;
+        bellFired        = false;
         stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
                   distractions: 0, distractionsTotal: 0,
                   focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
         renderStats();
         const startLabel = fmtHHMM(sessionStartTime);
         const goalPart   = sessionGoal ? ` | goal:${sessionGoal}` : '';
-        logEvent('SESSION START', `sess:${startLabel}${goalPart}`);
+        const prepPart   = ` | prep:${sessionPrep.length ? sessionPrep.join(',') : 'none'}`;
+        logEvent('SESSION START', `sess:${startLabel} | length:${plannedMin}m${goalPart}${prepPart}`);
         requestNotifPermission();
     }
     running = true;
@@ -564,6 +627,7 @@ function resume() {
     const s         = Math.floor((pausedMs % 60000) / 1000);
     const pausedStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
     cyclePausedMs  += pausedMs;
+    sessionPausedMs += pausedMs;
     pauseStartTime  = null;
 
     logEvent('RESUME', `sess:${fmtHHMM(sessionStartTime)} | paused:${pausedStr}`);
@@ -583,14 +647,22 @@ function resetTimer() {
     sessionStartTime = null;
     lastCycleStart   = null;
     cyclePausedMs    = 0;
+    sessionPausedMs  = 0;
+    sessionDeadline  = null;
+    bellFired        = false;
+    abandonDeadline  = null;
+    clearTimeout(abandonTimer);
+    document.getElementById('sessionBellOverlay').classList.remove('open');
     rem              = TOTAL;
     stats = { min: 0, checkins: 0, streak: 0, lastYes: false, pauses: 0,
               distractions: 0, distractionsTotal: 0,
               focusCounts: { High: 0, Medium: 0, Low: 0 }, distractionTriggers: {} };
     submitting  = false;
     sessionGoal = null;
+    sessionPrep = [];
     document.title = 'Study Tracker';
     document.getElementById('sWall').textContent = '0';
+    document.getElementById('sActive').textContent = '0';
     renderRing();
     updateFavicon();
     renderStats();
@@ -801,9 +873,13 @@ async function submitCompletion() {
     const summary = document.getElementById('completionNotes').value.trim() || null;
     document.getElementById('completionOverlay').classList.remove('open');
     await logSessionEnd(el.dataset.v, summary);
+    clearTimeout(abandonTimer);
     sessionStarted  = false;
     sessionGoal     = null;
+    sessionPrep     = [];
     pauseStartTime  = null;
+    sessionDeadline = null;
+    bellFired       = false;
     rem             = TOTAL;
     renderRing();
     document.getElementById('stopBtn').classList.add('hidden');
@@ -811,16 +887,23 @@ async function submitCompletion() {
     document.getElementById('startBtn').textContent = 'Start';
 }
 
-async function logSessionEnd(completion, summary = null) {
+async function logSessionEnd(completion, summary = null, abandoned = false) {
     const duration    = Math.round((Date.now() - sessionStartTime) / 60000);
-    const onTask      = duration ? Math.round(stats.min / duration * 100) : 0;
+    let pausedMs      = sessionPausedMs;
+    if (pauseStartTime) pausedMs += Date.now() - pauseStartTime;
+    const activeMin   = Math.max(0, Math.round((Date.now() - sessionStartTime - pausedMs) / 60000));
+    const onTask      = duration  ? Math.round(stats.min / duration  * 100) : 0;  // studied / wall-clock
+    const focusRatio  = activeMin ? Math.round(stats.min / activeMin * 100) : 0;  // studied / active (real)
     const fc          = stats.focusCounts;
     const focusStr    = `H${fc.High}/M${fc.Medium}/L${fc.Low}`;
     const topDistract = Object.entries(stats.distractionTriggers).sort((a,b) => b[1]-a[1])[0]?.[0] || 'none';
     const parts = [
         `sess:${fmtHHMM(sessionStartTime)}`,
+        `planned:${plannedMin}m`,
         `duration:${duration}m`,
+        `active:${activeMin}m`,
         `studied:${stats.min}m`,
+        `focus-ratio:${focusRatio}%`,
         `on-task:${onTask}%`,
         `pauses:${stats.pauses}`,
         `distractions:${stats.distractionsTotal}`,
@@ -829,6 +912,7 @@ async function logSessionEnd(completion, summary = null) {
     ];
     if (sessionGoal)  parts.push(`goal:${sessionGoal}`);
     if (completion)   parts.push(`completed:${completion}`);
+    if (abandoned)    parts.push(`abandoned:true`);
     if (summary)      parts.push(`summary:${summary}`);
     await logEvent('SESSION END', parts.join(' | '));
 }
@@ -839,6 +923,69 @@ function restartCycle() {
     rem = TOTAL;
     renderRing();
     startSession();
+}
+
+// ── Session bell (planned length reached) ──────────────────────────────────
+function fireSessionBell() {
+    bellFired = true;
+    worker.postMessage({ type: 'stop' });
+    running = false;
+    chime();
+    sendNotification('⏰ Planned session time reached',
+                     'End, keep going +10m, or take a break?');
+    document.getElementById('sessionBellOverlay').classList.add('open');
+    document.getElementById('status').textContent = 'time’s up';
+    document.title = '⏰ Time’s up! — Study Tracker';
+    abandonDeadline = Date.now() + (TEST_MODE ? 4000 : 120000);
+    clearTimeout(abandonTimer);
+    abandonTimer = setTimeout(autoEndAbandoned, TEST_MODE ? 4000 : 120000);
+}
+
+function closeBell() {
+    clearTimeout(abandonTimer);
+    abandonDeadline = null;
+    document.getElementById('bellCountdown').textContent = '';
+    document.getElementById('sessionBellOverlay').classList.remove('open');
+}
+
+function bellEnd() {
+    closeBell();
+    openCompletionModal();
+}
+
+function bellExtend(mins) {
+    closeBell();
+    sessionDeadline = Date.now() + mins * 60000;
+    bellFired = false;
+    toast(`+${mins}m added — keep going`, 'ok');
+    restartCycle();
+}
+
+function bellBreak() {
+    closeBell();
+    sessionDeadline = Date.now() + 10 * 60000;
+    bellFired = false;
+    restartCycle();   // resume a fresh study cycle…
+    pauseSession();   // …then drop straight into the pause flow
+}
+
+async function autoEndAbandoned() {
+    closeBell();
+    worker.postMessage({ type: 'stop' });
+    running = false;
+    await logSessionEnd('abandoned', 'Auto-ended: no response at session bell', true);
+    sessionStarted  = false;
+    sessionGoal     = null;
+    sessionPrep     = [];
+    pauseStartTime  = null;
+    sessionDeadline = null;
+    bellFired       = false;
+    rem             = TOTAL;
+    renderRing();
+    document.getElementById('stopBtn').classList.add('hidden');
+    document.getElementById('status').textContent   = 'abandoned';
+    document.getElementById('startBtn').textContent = 'Start';
+    toast('Session auto-ended (abandoned)', 'err');
 }
 
 function renderStats() {
@@ -940,8 +1087,28 @@ function toast(msg, type='') {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 setInterval(() => {
-    if (sessionStarted && sessionStartTime) {
-        document.getElementById('sWall').textContent = Math.floor((Date.now() - sessionStartTime) / 60000);
+    if (!sessionStarted || !sessionStartTime) return;
+    const now = Date.now();
+    document.getElementById('sWall').textContent = Math.floor((now - sessionStartTime) / 60000);
+
+    let pausedMs = sessionPausedMs;
+    if (pauseStartTime) pausedMs += now - pauseStartTime;
+    document.getElementById('sActive').textContent =
+        Math.max(0, Math.floor((now - sessionStartTime - pausedMs) / 60000));
+
+    // Fire the session bell once the planned length elapses — only while actively
+    // studying with no modal open, so it never stacks on another prompt.
+    if (sessionDeadline && !bellFired && running && now >= sessionDeadline
+        && !document.querySelector('.overlay.open')) {
+        fireSessionBell();
+    }
+
+    // Live auto-abandon countdown on the bell modal.
+    if (abandonDeadline) {
+        const left = Math.max(0, Math.ceil((abandonDeadline - now) / 1000));
+        const mm = Math.floor(left / 60), ss = left % 60;
+        document.getElementById('bellCountdown').textContent =
+            `Auto-ends as abandoned in ${mm}:${ss.toString().padStart(2,'0')}`;
     }
 }, 1000);
 renderRing();

@@ -74,6 +74,74 @@ test.describe('Goal modal', () => {
     });
 });
 
+test.describe('Pre-session checklist & length', () => {
+    test.beforeEach(async ({ page }) => {
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+    });
+
+    test('Pre-session modal shows checklist and a default 50m length', async ({ page }) => {
+        await page.click('#startBtn');
+        await expect(page.locator('#goalOverlay')).toHaveClass(/open/);
+        await expect(page.locator('#goalOverlay [data-prep="eaten"]')).toBeVisible();
+        await expect(page.locator('#goalOverlay [data-prep="water"]')).toBeVisible();
+        await expect(page.locator('#goalOverlay [data-len="50"]')).toHaveClass(/sel/);
+    });
+
+    test('Toggling checklist items marks them selected', async ({ page }) => {
+        await page.click('#startBtn');
+        await page.click('#goalOverlay [data-prep="eaten"]');
+        await expect(page.locator('#goalOverlay [data-prep="eaten"]')).toHaveClass(/sel/);
+    });
+
+    test('Choosing a length and prep still starts the session', async ({ page }) => {
+        await page.click('#startBtn');
+        await page.click('#goalOverlay [data-prep="phone"]');
+        await page.click('#goalOverlay [data-len="25"]');
+        await expect(page.locator('#goalOverlay [data-len="25"]')).toHaveClass(/sel/);
+        await page.click('#goalOverlay .btn-primary');
+        await expect(page.locator('#status')).toHaveText('studying');
+    });
+});
+
+test.describe('Session bell (planned length)', () => {
+    test.beforeEach(async ({ page }) => {
+        await mockFileSystem(page);
+        await page.goto(FILE_URL);
+        await connectFile(page);
+        await page.click('#startBtn');
+        await page.click('#goalOverlay .btn-ghost'); // skip goal
+        // Stop the check-in worker so it doesn't race the bell, then ring the bell.
+        await page.evaluate(() => { worker.postMessage({ type: 'stop' }); fireSessionBell(); });
+        await expect(page.locator('#sessionBellOverlay')).toHaveClass(/open/);
+    });
+
+    test('Bell offers End / +10m / break', async ({ page }) => {
+        await expect(page.locator('#sessionBellOverlay button:has-text("End session")')).toBeVisible();
+        await expect(page.locator('#sessionBellOverlay button:has-text("Keep going")')).toBeVisible();
+        await expect(page.locator('#sessionBellOverlay button:has-text("Take a break")')).toBeVisible();
+    });
+
+    test('Keep going +10m closes the bell and resumes studying', async ({ page }) => {
+        await page.click('#sessionBellOverlay button:has-text("Keep going")');
+        await expect(page.locator('#sessionBellOverlay')).not.toHaveClass(/open/);
+        await expect(page.locator('#status')).toHaveText('studying');
+    });
+
+    test('End session opens the completion modal', async ({ page }) => {
+        await page.click('#sessionBellOverlay button:has-text("End session")');
+        await expect(page.locator('#sessionBellOverlay')).not.toHaveClass(/open/);
+        await expect(page.locator('#completionOverlay')).toHaveClass(/open/);
+    });
+
+    test('No response auto-ends the session as abandoned', async ({ page }) => {
+        // In test mode the auto-abandon fires after 4s.
+        await expect(page.locator('#status')).toHaveText('abandoned', { timeout: 8000 });
+        await expect(page.locator('#startBtn')).toHaveText('Start');
+    });
+});
+
 test.describe('Timer and check-in', () => {
     test.beforeEach(async ({ page }) => {
         await mockFileSystem(page);
